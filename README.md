@@ -1,8 +1,8 @@
 # TODO
 
-- [ ] Implementar as interfaces de linha de comando (CLI) dos clientes
+- [x] Implementar as interfaces de linha de comando (CLI) dos clientes
 
-- [ ] Implementar a serialização do protocolo de comunicação
+- [x] Implementar a serialização do protocolo de comunicação
 
 - [ ] Implementar uma versão básica do mbroker, onde só existe uma thread que, em ciclo
 

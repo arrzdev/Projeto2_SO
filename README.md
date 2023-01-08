@@ -4,9 +4,9 @@
 
 - [x] Implementar a serialização do protocolo de comunicação
 
-- [ ] Implementar uma versão básica do mbroker, onde só existe uma thread que, em ciclo
+- [-] Implementar uma versão básica do mbroker, onde só existe uma thread que, em ciclo
 
-  - [ ] recebe um pedido de registo
+  - [x] recebe um pedido de registo
   - [ ] trata a sessão correspondente
   - [ ] volta a ficar à espera do pedido de registo
 

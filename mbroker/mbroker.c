@@ -2,6 +2,9 @@
 #include "string.h"
 #include "wire_protocol.h"
 
+#include "operations.h"
+#include "state.h"
+
 void session(OP_CODE_SIZE op_code, char *client_pipe_name, char *box_name)
 {
   (void)box_name;
@@ -41,6 +44,46 @@ void session(OP_CODE_SIZE op_code, char *client_pipe_name, char *box_name)
 
       // TODO: write the message in box located in tfs
     }
+
+  case CREATE_BOX:
+    char wire_message[PROTOCOL_MESSAGE_SIZE];
+    bool error = false;
+    
+    // TODO check if box exists
+
+    // create box
+    int fhandle = tfs_open(box_name, TFS_O_CREAT);
+
+    if (fhandle == -1 || tfs_close(fhandle) == -1)
+    {      
+      // send response to client
+      snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_CREATE_BOX, -1, "Error creating box");
+      error = true;
+    } 
+    else 
+    {
+      // send response to client
+      snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_CREATE_BOX, 0, "\0");
+    }
+
+    // open client pipe
+    if (access(client_pipe_name, F_OK))
+    {
+      printf("[Manager disconnected]\n");
+      break;
+    }
+
+    int client_fifo = open(client_pipe_name, O_WRONLY);
+
+    // write to client pipe
+    if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
+    {
+      printf("Error while writing to client fifo");
+      return;
+    };
+
+    if(error) printf("[Box created]\n");
+    else printf("[Box creation failed]\n");
 
     break;
   default:

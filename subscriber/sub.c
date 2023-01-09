@@ -15,8 +15,8 @@ int main(int argc, char **argv)
   char *client_pipe_name = argv[2];
   char *box_name = argv[3];
 
-  char wire_message[MAX_WIRE_MESSAGE_SIZE];
-  snprintf(wire_message, MAX_WIRE_MESSAGE_SIZE, "%d|%s|%s", OP_CODE, client_pipe_name, box_name);
+  char wire_message[PROTOCOL_MESSAGE_SIZE];
+  snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%s|%s", OP_CODE, client_pipe_name, box_name);
 
   printf("Subscriber Sent: %s\n", wire_message);
 

@@ -10,16 +10,19 @@ void session(OP_CODE_SIZE op_code, char *client_pipe_name, char *box_name)
   {
   case REGISTER_PUBLISHER:
     // handle publisher life cycle
-    printf("Publisher connected\n");
+    printf("[Publisher connected]\n");
 
     while (1)
     {
+      // check if the client is still connected
+      if (access(client_pipe_name, F_OK))
+      {
+        printf("[Publisher disconnected]\n");
+        break;
+      }
+
       // connect to publisher pipe
       int client_fifo = open(client_pipe_name, O_RDONLY);
-      if (client_fifo == -1) // TODO: this doesnt work
-      {
-        printf("client doesnt exist");
-      }
 
       // read from client fifo
       char buffer[PROTOCOL_MESSAGE_SIZE];

@@ -44,8 +44,9 @@ int main(int argc, char **argv)
   char message[MESSAGE_SIZE];
   while (1)
   {
-    if (scanf("%s", message) == EOF)
+    if (fgets(message, MESSAGE_SIZE, stdin) == NULL || strlen(message) == EOF)
     {
+      // end connection
       // delete client pipe
       unlink(client_pipe_name);
       printf("Closed connection");

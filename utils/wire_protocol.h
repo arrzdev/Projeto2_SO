@@ -10,6 +10,11 @@
 // uint_8 lib
 #include <stdint.h>
 
+// sprintf and sscanf
+#include <stdio.h>
+
+#include "string.h"
+
 // OP_CODES
 #define REGISTER_PUBLISHER 1
 #define REGISTER_SUBSCRIBER 2

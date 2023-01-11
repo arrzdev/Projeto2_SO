@@ -11,7 +11,7 @@ static void print_usage()
                   "   manager <register_pipe_name> <pipe_name> list\n");
 }
 
-int create_box(char *register_pipe_name, char *pipe_name, char *box_name)
+int createBox(char *register_pipe_name, char *pipe_name, char *box_name)
 {
   // make fifo
   if (mkfifo(pipe_name, 0666) == -1)
@@ -58,13 +58,112 @@ int create_box(char *register_pipe_name, char *pipe_name, char *box_name)
     break;
   }
 
-  if (error_code != 0)
+  printf("%s\n", wire_message);
+
+  return 0;
+}
+
+int deleteBox(char *register_pipe_name, char *pipe_name, char *box_name)
+{
+  // make fifo
+  if (mkfifo(pipe_name, 0666) == -1)
   {
-    printf("Error creating box: %s\n", error_message);
+    printf("Error creating fifo");
     return -1;
   }
 
-  printf("box created successfully\n");
+  char wire_message[PROTOCOL_MESSAGE_SIZE];
+  snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%s|%s", DELETE_BOX, pipe_name, box_name);
+
+  // open register fifo
+  int register_fifo = open(register_pipe_name, O_WRONLY);
+
+  // send wire message to register client
+  if (write(register_fifo, wire_message, strlen(wire_message) + 1) == -1)
+  {
+    printf("Error registering publisher");
+    return -1;
+  };
+
+  printf("Connected to server:\n \t- %s\n", wire_message);
+
+  OP_CODE_SIZE op_code;
+  RETURN_CODE_SIZE error_code;
+  char error_message[PROTOCOL_MESSAGE_SIZE];
+
+  int pipe = open(pipe_name, O_RDONLY);
+
+  // listen for response
+  while (1)
+  {
+    if (read(pipe, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
+    {
+      printf("Error reading response from server");
+      return -1;
+    }
+
+    sscanf(wire_message, "%hhd|%d|%[^\n]", &op_code, &error_code, error_message);
+
+    if (op_code != RETURN_DELETE_BOX)
+      continue;
+
+    break;
+  }
+
+  printf("%s\n", wire_message);
+
+  return 0;
+}
+
+int listBox(char *register_pipe_name, char *pipe_name)
+{
+  // make fifo
+  if (mkfifo(pipe_name, 0666) == -1)
+  {
+    printf("Error creating fifo");
+    return -1;
+  }
+
+  char wire_message[PROTOCOL_MESSAGE_SIZE];
+  snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%s", LIST_BOXES, pipe_name);
+
+  // open register fifo
+  int register_fifo = open(register_pipe_name, O_WRONLY);
+
+  // send wire message to register client
+  if (write(register_fifo, wire_message, strlen(wire_message) + 1) == -1)
+  {
+    printf("Error registering publisher");
+    return -1;
+  };
+
+  printf("Connected to server:\n \t- %s\n", wire_message);
+
+  OP_CODE_SIZE op_code;
+  uint8_t last;
+  char box_name[32];
+  uint64_t box_size;
+  uint64_t pubs;
+  uint64_t subs;
+
+  int pipe = open(pipe_name, O_RDONLY);
+
+  // listen for response
+  while (1)
+  {
+    if (read(pipe, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
+    {
+      printf("Error reading response from server");
+      return -1;
+    }
+
+    sscanf(wire_message, "%hhd|%hhd|%s|%lu|%lu|%lu", &op_code, &last, box_name, &box_size, &pubs, &subs);
+
+    if (op_code != RETURN_LIST_BOXES)
+      continue;
+
+    printf("%s\n", wire_message);
+  }
 
   return 0;
 }
@@ -91,7 +190,32 @@ int main(int argc, char **argv)
     char *pipe_name = argv[2];
     char *box_name = argv[4];
 
-    return create_box(register_pipe_name, pipe_name, box_name);
+    return createBox(register_pipe_name, pipe_name, box_name);
+  }
+  else if(strcmp(command, "delete") == 0)
+  {
+    if (argc != 5)
+    {
+      printf("too few arguments\n");
+      return -1;
+    }
+
+    char *pipe_name = argv[2];
+    char *box_name = argv[4];
+
+    return deleteBox(register_pipe_name, pipe_name, box_name);
+  }
+  else if(strcmp(command, "list") == 0)
+  {
+    if (argc != 4)
+    {
+      printf("too few arguments\n");
+      return -1;
+    }
+
+    char *pipe_name = argv[2];
+
+    return listBox(register_pipe_name, pipe_name);
   }
   else
   {

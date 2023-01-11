@@ -50,7 +50,7 @@ int main(int argc, char **argv)
       // delete client pipe
       unlink(client_pipe_name);
       printf("Closed connection");
-      return -1;
+      break;
     }
 
     // create wire message
@@ -63,6 +63,7 @@ int main(int argc, char **argv)
       printf("Error sending message\n");
       return -1;
     };
+    close(client_fifo);
 
     printf("Sent: %s\n", message);
   }

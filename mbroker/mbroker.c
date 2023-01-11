@@ -49,7 +49,7 @@ BoxData *initBox(char *box_name)
   return box;
 }
 
-int handle_publisher(char *client_pipe_name, char *box_name)
+int handlePublisher(char *client_pipe_name, char *box_name)
 {
   (void)box_name;
 
@@ -76,6 +76,9 @@ int handle_publisher(char *client_pipe_name, char *box_name)
       return -1;
     };
 
+    // close client fifo
+    close(client_fifo);
+
     // parse wire message
     OP_CODE_SIZE message_op_code;
     char message[MESSAGE_SIZE];
@@ -83,7 +86,6 @@ int handle_publisher(char *client_pipe_name, char *box_name)
 
     printf("Publisher: %s\n", message);
 
-    // TODO: check why the same message is being processed after client disconnect
     //  TODO: write the message in box located in tfs
   }
 
@@ -239,7 +241,7 @@ int listBoxes(char *client_pipe_name)
   return 0;
 }
 
-int delete_box(char *client_pipe_name, char *boxName)
+int deleteBox(char *client_pipe_name, char *boxName)
 {
   for (int i = 0; i <= serverState->boxCount; i++)
   {
@@ -312,11 +314,15 @@ void session(OP_CODE_SIZE op_code, char *client_pipe_name, char *box_name)
   switch (op_code)
   {
   case REGISTER_PUBLISHER:
-    handle_publisher(client_pipe_name, box_name);
+    handlePublisher(client_pipe_name, box_name);
     break;
 
   case CREATE_BOX:
     createBox(client_pipe_name, box_name);
+    break;
+
+  case DELETE_BOX:
+    deleteBox(client_pipe_name, box_name);
     break;
 
   case LIST_BOXES:
@@ -380,6 +386,9 @@ int main(int argc, char **argv)
     char client_pipe_name[PIPE_NAME_SIZE];
     char box_name[BOX_NAME_SIZE];
     sscanf(buffer, "%hhd|%[^|]|%s", &op_code, client_pipe_name, box_name);
+
+    printf("%s\n", client_pipe_name);
+    printf("%s\n", box_name);
 
     // this a single threaded version of broker so here we just keep attending to the client that just registered
     session(op_code, client_pipe_name, box_name);

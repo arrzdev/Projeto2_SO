@@ -190,7 +190,7 @@ int main(int argc, char **argv)
     char *pipe_name = argv[2];
     char *box_name = argv[4];
 
-    return create_box(register_pipe_name, pipe_name, box_name);
+    return createBox(register_pipe_name, pipe_name, box_name);
   }
   else if(strcmp(command, "delete") == 0)
   {
@@ -203,7 +203,7 @@ int main(int argc, char **argv)
     char *pipe_name = argv[2];
     char *box_name = argv[4];
 
-    return delete_box(register_pipe_name, pipe_name, box_name);
+    return deleteBox(register_pipe_name, pipe_name, box_name);
   }
   else if(strcmp(command, "list") == 0)
   {
@@ -215,7 +215,7 @@ int main(int argc, char **argv)
 
     char *pipe_name = argv[2];
 
-    return list_box(register_pipe_name, pipe_name);
+    return listBox(register_pipe_name, pipe_name);
   }
   else
   {

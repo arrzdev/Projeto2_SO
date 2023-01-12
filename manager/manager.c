@@ -10,6 +10,16 @@ static void print_usage()
                   "   manager <register_pipe_name> <pipe_name> list\n");
 }
 
+int compareBoxes(const void *box_a, const void *box_b)
+{
+  char box_name_a[BOX_NAME_SIZE];
+  char box_name_b[BOX_NAME_SIZE];
+
+  sscanf(box_a, "%[^|]", box_name_a);
+  sscanf(box_b, "%[^|]", box_name_b);
+  return strcmp(box_name_a, box_name_b);
+}
+
 int createRemoveBox(OP_CODE_SIZE action_code, char *register_pipe_name, char *client_pipe_name, char *box_name)
 {
   // send create request by connecting to server with CREATE_BOX op_code
@@ -77,6 +87,9 @@ int listBox(char *register_pipe_name, char *client_pipe_name)
 
   // listen for response
   char wire_message[PROTOCOL_MESSAGE_SIZE];
+  char **boxes = (char **)malloc(sizeof(char *));
+  int n_boxes = 0;
+  char buffer[PROTOCOL_MESSAGE_SIZE];
   while (!last_message)
   {
     if (read(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
@@ -84,19 +97,45 @@ int listBox(char *register_pipe_name, char *client_pipe_name)
       printf("Error reading response from server");
       return -1;
     }
-
     // parse
     sscanf(wire_message, "%hhd|%hhd|%[^|]|%lu|%lu|%lu", &op_code, &last_message, box_name, &box_size, &n_publishers, &n_subscribers);
 
     if (op_code != RETURN_LIST_BOXES) // check if the message is directed to us (should be but..)
       continue;
 
-    if (strlen(box_name) != 0)
-      fprintf(stdout, "%s %zu %zu %zu\n", box_name, box_size, n_publishers, n_subscribers);
-    else
+    // add string representation of the box to the buffer
+    sprintf(buffer, "%s %zu %zu %zu", box_name, box_size, n_publishers, n_subscribers);
+
+    // allocate memory for the buffer that contains the string representation of the box
+    boxes[n_boxes] = (char *)malloc((strlen(buffer) + 1) * sizeof(char));
+
+    strcpy(boxes[n_boxes], buffer);
+
+    // increment the dynamic vector size
+    n_boxes++;
+
+    // reallocate dynamic vector memory
+    boxes = (char **)realloc(boxes, (long unsigned int)n_boxes * sizeof(char *));
+  }
+
+  // handle the list of boxes
+  if (n_boxes != 0)
+  {
+    // sort the vector
+    qsort(boxes, (long unsigned int)n_boxes, sizeof(char *), compareBoxes);
+
+    // print them
+    for (int i = 0; i < n_boxes; i++)
     {
-      fprintf(stdout, "NO BOXES FOUND\n");
+      fprintf(stdout, "%s\n", boxes[i]);
+      free(boxes[i]);
     }
+
+    free(boxes);
+  }
+  else
+  {
+    fprintf(stdout, "NO BOXES FOUND\n");
   }
 
   // close client fifo

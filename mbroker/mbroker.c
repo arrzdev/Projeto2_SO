@@ -53,7 +53,9 @@ int handlePublisher(char *client_pipe_name, char *box_name)
 {
   (void)box_name;
 
-  // handle publisher life cycle
+  // TODO: only 1 publisher at a time is supposed to be connected to the box, so if a publisher tries to connect to a box and a publisher is already connected what happen?
+
+  // TODO: if a publisher or a subscriber try to connect to a box that doesnt exist, what happen?
 
   // connect to publisher
   int client_fifo = open(client_pipe_name, O_RDONLY);
@@ -77,8 +79,9 @@ int handlePublisher(char *client_pipe_name, char *box_name)
 
   // close fifo
   close(client_fifo);
+
+  // TODO: when publisher disconnects from the box, we need to decrement the n_publishers variable in the box_data
   printf("[Publisher disconnected]\n");
-  // close client fifo
   return 0;
 }
 
@@ -134,6 +137,7 @@ int createBox(char *client_pipe_name, char *box_name)
   strcpy(box->name, box_name);
 
   // add box to the server state
+  // TODO: check if it's better to implement a different add/remove reallocation by starting with a default dynamic array size and doubling it when needed, reducing the use of realloc
   server_state->boxes = realloc(server_state->boxes, sizeof(BoxData *) * (server_state->box_count + 1));
   if (server_state->boxes == NULL)
     return -1;

@@ -1,5 +1,7 @@
 #include "wire_protocol.h"
 
+// TODO: we could change the way the protocol works by still using strings, but having aux functions to parse the wire messages and return response structures with the data making it easy and more readble to work with trough the code
+
 int connect(OP_CODE_SIZE op_code, char *register_pipe_name, char *client_pipe_name, char *box_name)
 {
   // create the client pipe

@@ -197,8 +197,6 @@ int listBoxes(char *client_pipe_name)
       return -1;
     }
 
-    printf("i:%d; box_count:%ld, final:%d\n", i, server_state->box_count, i == server_state->box_count - 1);
-
     // write message
     snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%hhd|%hhd|%s|%ld|%ld|%ld", RETURN_LIST_BOXES, i == server_state->box_count - 1, name, box_size, pub, sub);
 

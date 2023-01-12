@@ -54,114 +54,90 @@ int handlePublisher(char *client_pipe_name, char *box_name)
   (void)box_name;
 
   // handle publisher life cycle
+
+  // connect to publisher
+  int client_fifo = open(client_pipe_name, O_RDONLY);
   printf("[Publisher connected]\n");
 
+  // read from publisher fifo
+  char buffer[PROTOCOL_MESSAGE_SIZE];
   while (1)
   {
-    // check if the client is still connected
-    if (access(client_pipe_name, F_OK))
-    {
-      printf("[Publisher disconnected]\n");
+    if (read(client_fifo, buffer, PROTOCOL_MESSAGE_SIZE) == 0)
       break;
-    }
 
-    // connect to publisher pipe
-    int client_fifo = open(client_pipe_name, O_RDONLY);
-
-    // read from client fifo
-    char buffer[PROTOCOL_MESSAGE_SIZE];
-    if (read(client_fifo, buffer, PROTOCOL_MESSAGE_SIZE) == -1)
-    {
-      printf("Error while reading client fifo");
-      return -1;
-    };
-
-    // close client fifo
-    close(client_fifo);
-
-    // parse wire message
+    // parse wire message received
     OP_CODE_SIZE message_op_code;
     char message[MESSAGE_SIZE];
     sscanf(buffer, "%hhd|%[^\n]", &message_op_code, message);
 
     printf("Publisher: %s\n", message);
-
     //  TODO: write the message in box located in tfs
   }
 
+  // close fifo
+  close(client_fifo);
+  printf("[Publisher disconnected]\n");
+  // close client fifo
   return 0;
 }
 
 int createBox(char *client_pipe_name, char *box_name)
 {
   char wire_message[PROTOCOL_MESSAGE_SIZE];
-  bool error = false;
 
   // format string for tfs
   char box_name_update[BOX_NAME_SIZE + 1] = "/";
 
+  // TODO: check if box already exist (idk how since we dont have access to tfs_lookup)
+  // probably need to extend tfs api
   strcat(box_name_update, box_name);
 
   // create box in tfs open
   int fhandle = tfs_open(box_name_update, TFS_O_CREAT);
 
   if (fhandle == -1 || tfs_close(fhandle) == -1)
-  {
-    // send response to client
+    // build ERROR response
     snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_CREATE_BOX, -1, "Error creating box");
-    error = true;
-  }
   else
-  {
-    // send response to client
+    // build OK response
     snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_CREATE_BOX, 0, "\0");
-  }
 
-  // check if client pipe exists
-  if (access(client_pipe_name, F_OK))
-  {
-    // TODO: when manager is not alive to receive the reponse it's supposed to still process the actions?
-    printf("[Manager disconnected]\n");
-    return 0;
-  }
+  // TODO: check if the client pipe exist to receive the response
 
   // open client pipe
   int client_fifo = open(client_pipe_name, O_WRONLY);
 
   // write to client pipe
+  // TODO: come up with a better way of sending the response back since more errors can occur bellow
   if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
   {
-    printf("Error while writing to client fifo");
+    printf("Error while writing to client fifo\n");
     return -1;
   };
 
-  if (error)
-    printf("[Box creation failed]\n");
-  else
-    printf("[Box created]\n");
+  // close client pipe
+  close(client_fifo);
 
-  // add box to the list of boxes
-  serverState->boxes = realloc(serverState->boxes, sizeof(BoxData *) * (serverState->boxCount + 1));
-  if (serverState->boxes == NULL)
-    return -1;
-
+  // create box structure
   BoxData *box = (BoxData *)malloc(sizeof(BoxData));
+  box->subs = 0;
+  box->pubs = 0;
 
   if (box == NULL)
     return -1;
 
+  // allocate memory for the box name
   box->name = (char *)malloc(sizeof(char) * (strlen(box_name) + 1));
-
   if (box->name == NULL)
     return -1;
-
   strcpy(box->name, box_name);
 
-  box->subs = 0;
-  box->pubs = 0;
-
+  // add box to the server state
+  serverState->boxes = realloc(serverState->boxes, sizeof(BoxData *) * (serverState->boxCount + 1));
+  if (serverState->boxes == NULL)
+    return -1;
   serverState->boxes[serverState->boxCount] = box;
-
   serverState->boxCount++;
 
   return 0;
@@ -381,14 +357,12 @@ int main(int argc, char **argv)
       return -1;
     };
 
-    // parse wire message
+    // TODO: add auxiliar functions to build and parse the protocol messages
+    //  parse wire message
     OP_CODE_SIZE op_code;
     char client_pipe_name[PIPE_NAME_SIZE];
     char box_name[BOX_NAME_SIZE];
     sscanf(buffer, "%hhd|%[^|]|%s", &op_code, client_pipe_name, box_name);
-
-    printf("%s\n", client_pipe_name);
-    printf("%s\n", box_name);
 
     // this a single threaded version of broker so here we just keep attending to the client that just registered
     session(op_code, client_pipe_name, box_name);

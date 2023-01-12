@@ -19,6 +19,7 @@ int connect(OP_CODE_SIZE op_code, char *register_pipe_name, char *client_pipe_na
   // send wire message to register client
   if (write(register_fifo, wire_message, strlen(wire_message) + 1) == -1)
   {
+    close(register_fifo);
     printf("Error registering publisher");
     unlink(client_pipe_name);
     return -1;
@@ -29,5 +30,5 @@ int connect(OP_CODE_SIZE op_code, char *register_pipe_name, char *client_pipe_na
   // close register fifo
   close(register_fifo);
 
-  return 1;
+  return 0;
 }

@@ -10,14 +10,16 @@ static void print_usage()
                   "   manager <register_pipe_name> <pipe_name> list\n");
 }
 
-int compareBoxes(const void *box_a, const void *box_b)
+// compare function to feed to qsort to compare box string representations by box_name
+int compareBoxes(const void *a, const void *b)
 {
-  char box_name_a[BOX_NAME_SIZE];
-  char box_name_b[BOX_NAME_SIZE];
+  char *box_a = *(char **)a;
+  char *box_b = *(char **)b;
 
-  sscanf(box_a, "%[^|]", box_name_a);
-  sscanf(box_b, "%[^|]", box_name_b);
-  return strcmp(box_name_a, box_name_b);
+  char *box_a_name = strtok(box_a, "|");
+  char *box_b_name = strtok(box_b, "|");
+
+  return strcmp(box_a_name, box_b_name);
 }
 
 int createRemoveBox(OP_CODE_SIZE action_code, char *register_pipe_name, char *client_pipe_name, char *box_name)
@@ -47,7 +49,7 @@ int createRemoveBox(OP_CODE_SIZE action_code, char *register_pipe_name, char *cl
   sscanf(wire_message, "%hhd|%d|%[^\n]", &op_code, &return_code, error_message);
 
   // check if the message is directed to us (should be but..)
-  if (op_code != RETURN_CREATE_BOX)
+  if (op_code != RETURN_CREATE_BOX && op_code != RETURN_DELETE_BOX)
   {
     printf("Received misplaced response from server");
     return -1;
@@ -78,7 +80,7 @@ int listBox(char *register_pipe_name, char *client_pipe_name)
 
   OP_CODE_SIZE op_code;
   uint8_t last_message;
-  char box_name[32];
+  char box_name[BOX_NAME_SIZE];
   uint64_t box_size;
   uint64_t n_publishers;
   uint64_t n_subscribers;
@@ -97,11 +99,16 @@ int listBox(char *register_pipe_name, char *client_pipe_name)
       printf("Error reading response from server");
       return -1;
     }
-    // parse
-    sscanf(wire_message, "%hhd|%hhd|%[^|]|%lu|%lu|%lu", &op_code, &last_message, box_name, &box_size, &n_publishers, &n_subscribers);
 
-    if (op_code != RETURN_LIST_BOXES) // check if the message is directed to us (should be but..)
-      continue;
+    // parse
+    if (sscanf(wire_message, "%hhd|%hhd|%[^|]|%lu|%lu|%lu", &op_code, &last_message, box_name, &box_size, &n_publishers, &n_subscribers) < 3)
+    {
+      break; // box_name is \0
+    }
+
+    // check if the message is directed to us (should be but..)
+    if (op_code != RETURN_LIST_BOXES)
+      break;
 
     // add string representation of the box to the buffer
     sprintf(buffer, "%s %zu %zu %zu", box_name, box_size, n_publishers, n_subscribers);

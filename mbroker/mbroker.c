@@ -116,6 +116,7 @@ int createBox(char *client_pipe_name, char *box_name)
   if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
   {
     printf("Error while writing to client fifo\n");
+    close(client_fifo);
     return -1;
   };
 
@@ -138,11 +139,20 @@ int createBox(char *client_pipe_name, char *box_name)
 
   // add box to the server state
   // TODO: check if it's better to implement a different add/remove reallocation by starting with a default dynamic array size and doubling it when needed, reducing the use of realloc
-  server_state->boxes = realloc(server_state->boxes, sizeof(BoxData *) * (server_state->box_count + 1));
+  server_state->box_count++;
+
+  server_state->boxes = realloc(server_state->boxes, sizeof(BoxData *) * server_state->box_count);
   if (server_state->boxes == NULL)
     return -1;
-  server_state->boxes[server_state->box_count] = box;
-  server_state->box_count++;
+
+  // insert the newly created box
+  server_state->boxes[server_state->box_count - 1] = box;
+
+  // after creating list boxes for debugging proposes
+  for (int i = 0; i < server_state->box_count; i++)
+  {
+    printf("Box name: %s\n", server_state->boxes[i]->name);
+  }
 
   return 0;
 }
@@ -152,9 +162,7 @@ int listBoxes(char *client_pipe_name)
   char wire_message[PROTOCOL_MESSAGE_SIZE];
 
   // TODO: check if client exists before trying to send the list
-
   // open client pipe
-  int client_fifo = open(client_pipe_name, O_WRONLY);
 
   // check if no box was created
   if (server_state->box_count == 0)
@@ -163,14 +171,23 @@ int listBoxes(char *client_pipe_name)
     snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s|%d|%d|%d", RETURN_LIST_BOXES, 1, "\0", 0, 0, 0);
 
     // write to client pipe
+    int client_fifo = open(client_pipe_name, O_WRONLY);
     if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
     {
       printf("Error while writing to client fifo");
+      close(client_fifo);
       return -1;
     };
 
+    // close client pipe
+    close(client_fifo);
     return 0;
   }
+
+  printf("Listing %ld boxes", server_state->box_count);
+
+  // open client fifo
+  int client_fifo = open(client_pipe_name, O_WRONLY);
 
   for (int i = 0; i < server_state->box_count; i++)
   {
@@ -189,6 +206,7 @@ int listBoxes(char *client_pipe_name)
     if (fhandle == -1)
     {
       printf("Error while getting file bytes");
+      close(client_fifo);
       return -1;
     }
 
@@ -198,88 +216,113 @@ int listBoxes(char *client_pipe_name)
     if (box_size == -1)
     {
       printf("Error while getting file bytes");
+      close(client_fifo);
       return -1;
     }
 
-    // write message
+    // parse wire message
     snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%hhd|%hhd|%s|%ld|%ld|%ld", RETURN_LIST_BOXES, i == server_state->box_count - 1, name, box_size, pub, sub);
 
     // write to client pipe
     if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
     {
       printf("Error while writing to client fifo");
+      close(client_fifo);
       return -1;
     };
   }
 
+  // close client fifo
+  close(client_fifo);
   return 0;
 }
 
 int deleteBox(char *client_pipe_name, char *box_name)
 {
-  // find the box position in server state list
-  int deleted = 0;
-  char error_message[MESSAGE_SIZE];
-  for (int i = 0; i <= server_state->box_count; i++)
+  char wire_message[PROTOCOL_MESSAGE_SIZE];
+  int box_index = -1;
+
+  // check if box exists
+  for (int i = 0; i < server_state->box_count; i++)
   {
-    BoxData *current_box_data = server_state->boxes[i];
-    char *current_box_name = current_box_data->name;
-    // if the box is not the one we want we keep looking forward
-    if (strcmp(current_box_name, box_name) != 0)
-      continue;
-
-    // format string for tfs
-    char box_name_update[BOX_NAME_SIZE + 1] = "/";
-    strcat(box_name_update, box_name);
-
-    // create response message
-    if (tfs_unlink(box_name_update) == -1)
+    if (strcmp(server_state->boxes[i]->name, box_name) == 0)
     {
-      strcpy(error_message, "Error deleting box file from tfs");
+      box_index = i;
       break;
     }
+  }
 
-    // free boxdata info
-    free(current_box_name);
-    free(current_box_data);
+  if (box_index == -1)
+  {
+    // build ERROR response
+    snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_DELETE_BOX, -1, "Error: Box does not exist");
 
-    // if we have more than 2 box's and the box isn't the last one we swap it with the last one
-    if (i != 1 && i != server_state->box_count)
+    // write to client pipe
+    int client_fifo = open(client_pipe_name, O_WRONLY);
+    if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
     {
-      server_state->boxes[i] = server_state->boxes[server_state->box_count];
+      printf("Error while writing to client fifo");
+      close(client_fifo);
+      return -1;
     }
 
-    // realloc the memory to get rid of the last box
-    server_state->boxes = realloc(server_state->boxes, sizeof(BoxData *) * (server_state->box_count - 1));
-    if (server_state->boxes == NULL)
+    // close client pipe
+    close(client_fifo);
+
+    return 0;
+  }
+
+  // delete box from tfs
+  char box_name_update[BOX_NAME_SIZE + 1] = "/";
+  strcat(box_name_update, box_name);
+
+  if (tfs_unlink(box_name_update) == -1)
+  {
+    // build ERROR response
+    snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_DELETE_BOX, -1, "Error deleting box from TFS");
+
+    // write to client pipe
+    int client_fifo = open(client_pipe_name, O_WRONLY);
+    if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
+    {
+      printf("Error while writing to client fifo");
+      close(client_fifo);
       return -1;
+    }
 
-    server_state->box_count--;
-    deleted = 1;
-    break;
+    // close client pipe
+    close(client_fifo);
+
+    return -1;
   }
 
-  char wire_message[PROTOCOL_MESSAGE_SIZE];
-  if (deleted)
+  // free memory allocated for the box name
+  free(server_state->boxes[box_index]->name);
+
+  // free memory allocated for the box data structure
+  free(server_state->boxes[box_index]);
+
+  // remove the box from the server state
+  for (int i = box_index; i < server_state->box_count - 1; i++)
   {
-    // success reponse
-    snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d | %d | %s", RETURN_DELETE_BOX, 0, "\0");
+    server_state->boxes[i] = server_state->boxes[i + 1];
   }
-  else
-  {
-    snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d | %d | %s", RETURN_DELETE_BOX, -1, error_message);
-  }
+  server_state->box_count--;
 
-  // TODO: check if client still exists before trying to return the response
-  // open client pipe
+  // build OK response
+  snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_DELETE_BOX, 0, "\0");
+
+  // write to client pipe
   int client_fifo = open(client_pipe_name, O_WRONLY);
-
-  // send response to client
   if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
   {
-    printf("Error while sending action response to manager\n");
+    printf("Error while writing to client fifo");
+    close(client_fifo);
     return -1;
-  };
+  }
+
+  // close client pipe
+  close(client_fifo);
 
   return 0;
 }

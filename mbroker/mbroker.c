@@ -137,6 +137,7 @@ int handlePublisher(char *client_pipe_name, char *box_name)
 
     printf("Publisher: %s\n", buffer_to_write);
 
+    // needs to be open every time to adjust offset to start writing in correct spot
     fhandle = tfs_open(updatedBoxName, TFS_O_APPEND);
 
     if(fhandle == -1) {

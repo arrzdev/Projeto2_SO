@@ -5,11 +5,16 @@
 #include "operations.h"
 #include "state.h"
 
+#include "pthread.h"
+
 typedef struct
 {
   char *name;
   uint64_t subs;
   uint64_t pubs;
+
+  pthread_mutex_t pcq_publisher_condvar_lock;
+  pthread_cond_t pcq_publisher_condvar;
 } BoxData;
 
 typedef struct
@@ -46,20 +51,71 @@ BoxData *initBox(char *box_name)
   box->subs = 0;
   box->pubs = 0;
 
+  if(pthread_mutex_init(&box->pcq_publisher_condvar_lock, NULL) != 0)
+    return NULL;
+
+  if(pthread_cond_init(&box->pcq_publisher_condvar, NULL) != 0)
+    return NULL;
+
   return box;
+}
+
+BoxData* getBox(char *box_name)
+{
+  for(int i = 0; i < server_state->box_count; i++) {
+    if(strcmp(server_state->boxes[i]->name, box_name) == 0)
+      return server_state->boxes[i];
+  }
+
+  return NULL;
 }
 
 int handlePublisher(char *client_pipe_name, char *box_name)
 {
-  (void)box_name;
-
-  // TODO: only 1 publisher at a time is supposed to be connected to the box, so if a publisher tries to connect to a box and a publisher is already connected what happen?
+  // TODO how to tell server that return was -1 ?
 
   // TODO: if a publisher or a subscriber try to connect to a box that doesnt exist, what happen?
+  // currently returns -1;
+  BoxData* box = getBox(box_name);
+
+  if(box == NULL) {
+    printf("Box doesnt exist\n");
+    return -1;
+  }
+
+  if(pthread_mutex_lock(&box->pcq_publisher_condvar_lock) != 0) {
+    printf("Error locking mutex\n");
+    return -1;
+  }
+
+  // TODO: only 1 publisher at a time is supposed to be connected to the box, so if a publisher tries to connect to a box and a publisher is already connected what happen?
+  // if more than one publisher is connected to a box
+  // wait for publisher to disconnect
+  while(box->pubs != 0) {
+      if(pthread_cond_wait(&box->pcq_publisher_condvar, &box->pcq_publisher_condvar_lock) != 0)
+          return -1;
+  }
+
+  box->pubs++;
+
+  // Unlock
+  if(pthread_mutex_unlock(&box->pcq_publisher_condvar_lock) != 0){
+      printf("Error unlocking mutex\n");
+      box->pubs--;
+      // signal pubs decrement
+      pthread_cond_signal(&box->pcq_publisher_condvar);
+      return -1;
+  }
+
+  char updatedBoxName[BOX_NAME_SIZE + 1] = "/";
+
+  strcat(updatedBoxName, box->name);
 
   // connect to publisher
   int client_fifo = open(client_pipe_name, O_RDONLY);
   printf("[Publisher connected]\n");
+
+  int fhandle = -1;
 
   // read from publisher fifo
   char buffer[PROTOCOL_MESSAGE_SIZE];
@@ -73,15 +129,52 @@ int handlePublisher(char *client_pipe_name, char *box_name)
     char message[MESSAGE_SIZE];
     sscanf(buffer, "%hhd|%[^\n]", &message_op_code, message);
 
-    printf("Publisher: %s\n", message);
+    size_t message_len = strlen(message);
+
+    char buffer_to_write[message_len + 1];
+    strcpy(buffer_to_write, message);
+    buffer_to_write[message_len] = '\0';
+
+    printf("Publisher: %s\n", buffer_to_write);
+
+    fhandle = tfs_open(updatedBoxName, TFS_O_APPEND);
+
+    if(fhandle == -1) {
+      printf("Error opening box %s\n", box->name);
+      break;
+    }
+    
     //  TODO: write the message in box located in tfs
+    // DONE
+    if(tfs_write(fhandle, buffer_to_write, message_len + 1) == -1) {
+      // TODO check error handling while writing to box
+      printf("Error writing to box %s\n", box->name);
+      break;
+    }
+
+    if(tfs_close(fhandle) == -1) {
+      printf("Eror closing file\n");
+      break;
+    }
   }
+
+  // close box
+  // no error checking because if error still need to run command below
+  if(fhandle != -1) tfs_close(fhandle); 
 
   // close fifo
   close(client_fifo);
 
   // TODO: when publisher disconnects from the box, we need to decrement the n_publishers variable in the box_data
+  // DONE
   printf("[Publisher disconnected]\n");
+
+  box->pubs--;
+
+  // signal change in box pubs
+  if(pthread_cond_signal(&box->pcq_publisher_condvar) != 0)
+    return -1;
+
   return 0;
 }
 

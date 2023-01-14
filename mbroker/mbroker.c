@@ -5,11 +5,20 @@
 #include "operations.h"
 #include "state.h"
 
+#include "pthread.h"
+
 typedef struct
 {
   char *name;
+  ssize_t size;
+
   uint64_t subs;
   uint64_t pubs;
+
+  pthread_mutex_t pcq_publisher_condvar_lock;
+  pthread_cond_t pcq_publisher_condvar;
+
+  pthread_cond_t pcq_subscriber_condvar;
 } BoxData;
 
 typedef struct
@@ -43,23 +52,78 @@ BoxData *initBox(char *box_name)
 
   strcpy(box->name, box_name);
 
+  box->size = 0;
   box->subs = 0;
   box->pubs = 0;
+
+  if(pthread_mutex_init(&box->pcq_publisher_condvar_lock, NULL) != 0)
+    return NULL;
+
+  if(pthread_cond_init(&box->pcq_publisher_condvar, NULL) != 0)
+    return NULL;
+
+  if(pthread_cond_init(&box->pcq_subscriber_condvar, NULL) != 0)
+    return NULL;
 
   return box;
 }
 
+BoxData* getBox(char *box_name)
+{
+  for(int i = 0; i < server_state->box_count; i++) {
+    if(strcmp(server_state->boxes[i]->name, box_name) == 0)
+      return server_state->boxes[i];
+  }
+
+  return NULL;
+}
+
 int handlePublisher(char *client_pipe_name, char *box_name)
 {
-  (void)box_name;
-
-  // TODO: only 1 publisher at a time is supposed to be connected to the box, so if a publisher tries to connect to a box and a publisher is already connected what happen?
+  // TODO how to tell server that return was -1 ?
 
   // TODO: if a publisher or a subscriber try to connect to a box that doesnt exist, what happen?
+  // currently returns -1;
+  BoxData* box = getBox(box_name);
+
+  if(box == NULL) {
+    printf("Box doesnt exist\n");
+    return -1;
+  }
+
+  if(pthread_mutex_lock(&box->pcq_publisher_condvar_lock) != 0) {
+    printf("Error locking mutex\n");
+    return -1;
+  }
+
+  // TODO: only 1 publisher at a time is supposed to be connected to the box, so if a publisher tries to connect to a box and a publisher is already connected what happen?
+  // if more than one publisher is connected to a box
+  // wait for publisher to disconnect
+  while(box->pubs != 0) {
+      if(pthread_cond_wait(&box->pcq_publisher_condvar, &box->pcq_publisher_condvar_lock) != 0)
+          return -1;
+  }
+
+  box->pubs++;
+
+  // Unlock
+  if(pthread_mutex_unlock(&box->pcq_publisher_condvar_lock) != 0){
+      printf("Error unlocking mutex\n");
+      box->pubs--;
+      // broadcast pubs decrement
+      pthread_cond_broadcast(&box->pcq_publisher_condvar);
+      return -1;
+  }
+
+  char updatedBoxName[BOX_NAME_SIZE + 1] = "/";
+
+  strcat(updatedBoxName, box->name);
 
   // connect to publisher
   int client_fifo = open(client_pipe_name, O_RDONLY);
   printf("[Publisher connected]\n");
+
+  int fhandle = -1;
 
   // read from publisher fifo
   char buffer[PROTOCOL_MESSAGE_SIZE];
@@ -73,16 +137,186 @@ int handlePublisher(char *client_pipe_name, char *box_name)
     char message[MESSAGE_SIZE];
     sscanf(buffer, "%hhd|%[^\n]", &message_op_code, message);
 
-    printf("Publisher: %s\n", message);
+    size_t message_len = strlen(message);
+
+    char buffer_to_write[message_len + 1];
+    strcpy(buffer_to_write, message);
+    buffer_to_write[message_len] = '\0';
+
+    printf("Publisher: %s\n", buffer_to_write);
+
+    // needs to be open every time to adjust offset to start writing in correct spot
+    fhandle = tfs_open(updatedBoxName, TFS_O_APPEND);
+
+    if(fhandle == -1) {
+      printf("Error opening box %s\n", box->name);
+      break;
+    }
+    
     //  TODO: write the message in box located in tfs
+    // DONE
+    ssize_t bytes_written = tfs_write(fhandle, buffer_to_write, message_len + 1);
+
+    if(bytes_written == -1) {
+      // TODO check error handling while writing to box
+      printf("Error writing to box %s\n", box->name);
+      break;
+    }
+
+    box->size += bytes_written;
+
+    // broadcast change in box subs
+    if(pthread_cond_broadcast(&box->pcq_subscriber_condvar) != 0)
+      return -1;
+
+    if(tfs_close(fhandle) == -1) {
+      printf("Eror closing file\n");
+      break;
+    }
+  }
+
+  // close box
+  // no error checking because if error still need to run command below
+  if(fhandle != -1){
+    tfs_close(fhandle);
   }
 
   // close fifo
   close(client_fifo);
 
   // TODO: when publisher disconnects from the box, we need to decrement the n_publishers variable in the box_data
+  // DONE
   printf("[Publisher disconnected]\n");
+
+  box->pubs--;
+
+  // broadcast change in box pubs
+  if(pthread_cond_broadcast(&box->pcq_publisher_condvar) != 0)
+    return -1;
+
   return 0;
+}
+
+int handleSubscriber(char *client_pipe_name, char *box_name)
+{
+    // Find the specified box
+    BoxData* box = getBox(box_name);
+    if(box == NULL) {
+        printf("Error: Box %s does not exist.\n", box_name);
+        return -1;
+    }
+
+    box->subs++;
+
+    char updatedBoxName[BOX_NAME_SIZE + 1] = "/";
+
+    strcat(updatedBoxName, box->name);
+
+    // connect to publisher
+    int client_fifo = open(client_pipe_name, O_WRONLY);
+    printf("[Subscriber connected]\n");
+
+    int fhandle = -1;
+
+    ssize_t bytes_read;
+    ssize_t last_bytes_read = 0;
+
+    pthread_mutex_t box_subscriber;
+
+    if(pthread_mutex_init(&box_subscriber, NULL) != 0) {
+        printf("Error initializing mutex\n");
+        return -1;
+    }
+
+    char buffer[PROTOCOL_MESSAGE_SIZE];
+
+    //TODO: disconnect subscriber
+
+    int runs = 0;
+
+    while(1)
+    {
+        // needs to be open every time to adjust offset to start writing in correct spot
+        fhandle = tfs_open(updatedBoxName, 0);
+
+        if(fhandle == -1) {
+            printf("Error opening box %s\n", box->name);
+            break;
+        }
+
+        bytes_read = tfs_read(fhandle, buffer, PROTOCOL_MESSAGE_SIZE);
+
+        if(bytes_read == -1) {
+            // TODO check error handling while writing to box
+            printf("Error reading from box %s\n", box->name);
+            break;
+        }
+
+        printf("Last bytes read: %ld\n", last_bytes_read);
+        printf("Read %ld bytes of %ld from box %s\n", bytes_read, box->size, box->name);
+
+        if(pthread_mutex_lock(&box_subscriber) != 0) {
+            printf("Error locking mutex\n");
+            return -1;
+        }
+
+        while(last_bytes_read == box->size) {
+            printf("Waiting for publisher to write to box %s\n" , box->name);
+            if(pthread_cond_wait(&box->pcq_subscriber_condvar, &box_subscriber) != 0)
+                return -1;
+        }
+
+        if(pthread_mutex_unlock(&box_subscriber) != 0) {
+            printf("Error unlocking mutex\n");
+            return -1;
+        }
+
+        if(runs > 4)
+          break;
+
+        char message[MESSAGE_SIZE];
+
+        for(int i = 0; i < bytes_read - last_bytes_read; i++) {
+            if(buffer[last_bytes_read + i] == '\0') {
+                message[i] = '\0';
+                last_bytes_read += i + 1;
+                break;
+            } else {
+                message[i] = buffer[last_bytes_read + i];
+            }
+        }
+
+        printf("Sending to subscriber: %s\n", message);
+
+        char wire_message[PROTOCOL_MESSAGE_SIZE];
+
+        sprintf(wire_message, "%d|%s", SEND_SUBSCRIBER, message);
+
+        if(write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1) {
+            printf("Error writing to client fifo\n");
+            break;
+        }
+
+        if(tfs_close(fhandle) == -1) {
+            printf("Eror closing file\n");
+            break;
+        }
+
+        runs++;
+    }
+
+    // close box
+    // no error checking because if error still need to run command below
+    if(fhandle != -1){
+        tfs_close(fhandle);
+    }
+
+    // close fifo
+    close(client_fifo);
+
+    box->subs--;
+
+    return 0;
 }
 
 int createBox(char *client_pipe_name, char *box_name)
@@ -93,13 +327,15 @@ int createBox(char *client_pipe_name, char *box_name)
   char box_name_update[BOX_NAME_SIZE + 1] = "/";
 
   // TODO: check if box already exist (idk how since we dont have access to tfs_lookup)
+  // DONE
+
   // probably need to extend tfs api
   strcat(box_name_update, box_name);
 
   // create box in tfs open
   int fhandle = tfs_open(box_name_update, TFS_O_CREAT);
 
-  if (fhandle == -1 || tfs_close(fhandle) == -1)
+  if (fhandle == -1 || tfs_close(fhandle) == -1 || getBox(box_name) == NULL)
     // build ERROR response
     snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_CREATE_BOX, -1, "Error creating box");
   else
@@ -333,6 +569,10 @@ void session(OP_CODE_SIZE op_code, char *client_pipe_name, char *box_name)
   {
   case REGISTER_PUBLISHER:
     handlePublisher(client_pipe_name, box_name);
+    break;
+
+  case REGISTER_SUBSCRIBER:
+    handleSubscriber(client_pipe_name, box_name);
     break;
 
   case CREATE_BOX:

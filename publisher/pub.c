@@ -1,7 +1,6 @@
 #include "logging.h"
 #include "client.h"
 #include "wire_protocol.h"
-#include "string.h"
 
 int main(int argc, char **argv)
 {
@@ -33,8 +32,8 @@ int main(int argc, char **argv)
     snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%s", SEND_MESSAGE, buffer);
 
     // if stdin is EOF disconnect client
-    if (feof(stdin))
-      break;
+    // if (feof(stdin))
+    //   break;
 
     // send wire message to server using client pipe
     if (write(client_fifo, wire_message, strlen(wire_message) + 1) == -1)

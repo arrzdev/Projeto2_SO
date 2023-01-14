@@ -1,7 +1,15 @@
 #include "logging.h"
 #include "client.h"
 #include "wire_protocol.h"
-#include "string.h"
+#include <signal.h>
+
+volatile sig_atomic_t disconnect_flag = 0;
+
+static void handleSIGINT(int sig)
+{
+  (void)sig;
+  disconnect_flag = 1;
+}
 
 int main(int argc, char **argv)
 {
@@ -26,12 +34,23 @@ int main(int argc, char **argv)
   int client_fifo = open(client_pipe_name, O_RDONLY);
 
   char buffer[PROTOCOL_MESSAGE_SIZE];
-  
-  while(1){
-    if(read(client_fifo, buffer, PROTOCOL_MESSAGE_SIZE) == 0)
+
+  // setup signal handler
+  signal(SIGINT, handleSIGINT);
+
+  while (1)
+  {
+    if (disconnect_flag)
       break;
-    printf("Received: %s\n", buffer);
+
+    if (read(client_fifo, buffer, PROTOCOL_MESSAGE_SIZE) == 0)
+      break;
+
+    // print message
+    fprintf(stdout, "%s\n", buffer);
   }
+
+  printf("Disconnected...\n");
 
   // close fifo
   close(client_fifo);

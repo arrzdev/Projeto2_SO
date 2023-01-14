@@ -16,6 +16,7 @@
 #include "string.h"
 
 // OP_CODES
+// TODO: change to be more descriptive
 #define REGISTER_PUBLISHER 1
 #define REGISTER_SUBSCRIBER 2
 #define CREATE_BOX 3

@@ -21,6 +21,14 @@ int main(int argc, char **argv)
     return -1;
   }
 
+  sleep(1);
+
+  if (access(client_pipe_name, F_OK) != 0)
+  {
+    printf("Error occured\n");
+    return -1;
+  }
+
   // open the client fifo
   int client_fifo = open(client_pipe_name, O_WRONLY);
 
@@ -31,15 +39,20 @@ int main(int argc, char **argv)
     // create wire message
     snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%s", SEND_MESSAGE, buffer);
 
-    // if stdin is EOF disconnect client
-    // if (feof(stdin))
-    //   break;
+    // check if fifo is open
+    if (access(client_pipe_name, F_OK) != 0)
+    {
+      printf("Error sending message\n");
+      return -1;
+    }
 
     // send wire message to server using client pipe
     if (write(client_fifo, wire_message, strlen(wire_message) + 1) == -1)
     {
       // close client fifo
-      close(client_fifo);
+      if (close(client_fifo) == -1)
+        WARN("Error closing fifo %s\n", client_pipe_name);
+
       printf("Error sending message\n");
       return -1;
     };
@@ -48,7 +61,10 @@ int main(int argc, char **argv)
   }
 
   // close fifo
-  close(client_fifo);
+  if (close(client_fifo) == -1){
+    WARN("Error closing fifo %s\n", client_pipe_name);
+    return -1;
+  }
 
   // unlink fifo
   unlink(client_pipe_name);

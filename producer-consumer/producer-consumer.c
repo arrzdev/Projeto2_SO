@@ -13,14 +13,12 @@ This allows for O(1) enqueue and dequeue operations.
 
 int has_priority(void *element)
 {
-  if(element == NULL)
-    return 0;
-
   char *str = (char *)element;
 
-  int first_char = str[0] - '0';
+  // str[0] to int
+  int priority = str[0] - '0';
 
-  return first_char == REGISTER_PUBLISHER;
+  return priority == REGISTER_PUBLISHER;
 }
 
 int pcq_create(pc_queue_t *queue, size_t capacity)
@@ -42,8 +40,8 @@ int pcq_create(pc_queue_t *queue, size_t capacity)
   queue->pcq_capacity = capacity;
   queue->pcq_current_size = 0;
 
-  queue->pcq_head = capacity - 1;
-  queue->pcq_tail = capacity - 1;
+  queue->pcq_head = 0;
+  queue->pcq_tail = 0;
 
   // Initialize the mutex and condition variables
   if (pthread_mutex_init(&queue->pcq_current_size_lock, NULL) != 0)
@@ -99,8 +97,6 @@ int pcq_enqueue(pc_queue_t *queue, void *elem)
   {
     return -1;
   }
-
-  printf("enqueue %s\n", (char *)elem);
   
   // Lock the mutex
   if (pthread_mutex_lock(&queue->pcq_popper_condvar_lock) != 0)
@@ -127,43 +123,37 @@ int pcq_enqueue(pc_queue_t *queue, void *elem)
   if (pthread_mutex_lock(&queue->pcq_tail_lock) != 0)
     return -1;
 
-  int priority_el = has_priority(elem);
+  // Add the element to the queue
+  queue->pcq_buffer[queue->pcq_head] = elem;
 
-  if (priority_el)
+  if (has_priority(elem))
   {
-    // this value start has value after tail
-    size_t next_pos;
+    size_t i = queue->pcq_head;
 
-    if (queue->pcq_tail == 0)
-      next_pos = queue->pcq_capacity - 1;
-    else
-      next_pos = queue->pcq_tail - 1;
-
-    queue->pcq_buffer[next_pos] = elem;
-
-    // put this element is next_pos, if prev element has priority swap untill not
-    int i = 0;
-
-    while(i < queue->pcq_current_size) {
-      if (has_priority(queue->pcq_buffer[next_pos])) {
-        void *temp = queue->pcq_buffer[next_pos];
-        queue->pcq_buffer[next_pos] = queue->pcq_buffer[queue->pcq_tail];
-        queue->pcq_buffer[queue->pcq_tail] = temp;
+    while (i != queue->pcq_tail)
+    {
+      
+      size_t next = (i + 1) % queue->pcq_capacity;
+      
+      if(!has_priority(queue->pcq_buffer[next])) {
+        // swap
+        void *temp = queue->pcq_buffer[i];
+        queue->pcq_buffer[i] = queue->pcq_buffer[next];
+        queue->pcq_buffer[next] = temp;
       }
-      next_pos = (next_pos + 1) % queue->pcq_capacity;
-      i++;
+      else {
+        break;
+      }
+
+      i = next;
     }
-
-    queue->pcq_tail = next_pos;
   }
+
+  // Update head value
+  if (queue->pcq_head == 0)
+    queue->pcq_head = queue->pcq_capacity - 1;
   else
-  {
-    // Add the element to the queue
-    queue->pcq_buffer[queue->pcq_head] = elem;
-
-    // Update head value
-    queue->pcq_head = (queue->pcq_head + 1) % queue->pcq_capacity;
-  }
+    queue->pcq_head--;
 
   // Increase the current size
   queue->pcq_current_size++;
@@ -188,17 +178,6 @@ int pcq_enqueue(pc_queue_t *queue, void *elem)
     return -1;
 
   printf("Added to queue: %s\n", (char *)elem);
-
-  printf("Head: %ld\n", queue->pcq_head);
-  printf("Tail: %ld\n", queue->pcq_tail);
-
-  // print all elements in queue
-  int i = 0;
-  while (i < queue->pcq_capacity)
-  {
-    printf("queue[%d] = %s\n", i, (char *)queue->pcq_buffer[i]);
-    i++;
-  }
 
   return 0;
 }
@@ -235,7 +214,10 @@ void *pcq_dequeue(pc_queue_t *queue)
   void *elem = queue->pcq_buffer[queue->pcq_tail];
   queue->pcq_buffer[queue->pcq_tail] = NULL;
   // Update tail value
-  queue->pcq_tail = (queue->pcq_tail + 1) % queue->pcq_capacity;
+  if (queue->pcq_tail == 0)
+    queue->pcq_tail = queue->pcq_capacity - 1;
+  else
+    queue->pcq_tail--;
 
   // Decrease the current size
   queue->pcq_current_size--;

@@ -753,7 +753,7 @@ int main(int argc, char **argv)
   // init n_sessions threads
   pc_queue_t pcq;
 
-  pcq_create(&pcq, n_sessions);
+  pcq_create(&pcq, n_sessions + 20);
 
   for (int i = 0; i < n_sessions; i++)
   {

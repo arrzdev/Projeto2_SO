@@ -94,7 +94,7 @@ int pcq_enqueue(pc_queue_t *queue, void *elem)
   {
     return -1;
   }
-
+  
   // Lock the mutex
   if (pthread_mutex_lock(&queue->pcq_popper_condvar_lock) != 0)
     return -1;
@@ -107,10 +107,6 @@ int pcq_enqueue(pc_queue_t *queue, void *elem)
     if (pthread_cond_wait(&queue->pcq_popper_condvar, &queue->pcq_popper_condvar_lock) != 0)
       return -1;
   }
-
-  // Unlock
-  if (pthread_mutex_unlock(&queue->pcq_popper_condvar_lock) != 0)
-    return -1;
 
   // Lock the current_size mutex
   if (pthread_mutex_lock(&queue->pcq_current_size_lock) != 0)
@@ -174,6 +170,10 @@ int pcq_enqueue(pc_queue_t *queue, void *elem)
   if (pthread_mutex_unlock(&queue->pcq_current_size_lock) != 0)
     return -1;
 
+  // Unlock
+  if (pthread_mutex_unlock(&queue->pcq_popper_condvar_lock) != 0)
+    return -1;
+
   // signal pusher cond var
   if (pthread_cond_signal(&queue->pcq_pusher_condvar) != 0)
     return -1;
@@ -203,10 +203,6 @@ void *pcq_dequeue(pc_queue_t *queue)
       return NULL;
   }
 
-  // Unlock
-  if (pthread_mutex_unlock(&queue->pcq_pusher_condvar_lock) != 0)
-    return NULL;
-
   // Lock the current_size mutex
   if (pthread_mutex_lock(&queue->pcq_current_size_lock) != 0)
     return NULL;
@@ -233,6 +229,11 @@ void *pcq_dequeue(pc_queue_t *queue)
 
   // Unlock the current_size mutex
   if (pthread_mutex_unlock(&queue->pcq_current_size_lock) != 0)
+    return NULL;
+
+  
+  // Unlock
+  if (pthread_mutex_unlock(&queue->pcq_pusher_condvar_lock) != 0)
     return NULL;
 
   // signal popper cond var

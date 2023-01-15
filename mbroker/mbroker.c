@@ -250,9 +250,50 @@ int handleSubscriber(char *client_pipe_name, char *box_name)
   // TODO: change every return -1 to variable error.. and return error in the end
   while (access(client_pipe_name, F_OK) != -1)
   {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 1;
+    if (pthread_mutex_lock(&box_subscriber) != 0)
+    {
+      printf("Error locking mutex\n");
+      return -1;
+    }
+
+    int res = 0;
+
+    while(box->size == last_bytes_read)
+    {
+      // wait for publisher to write to box
+      struct timespec ts;
+      clock_gettime(CLOCK_REALTIME, &ts);
+      ts.tv_sec += 1; // 1s
+
+      // time out limit to check if subscriber is still connected
+      res = pthread_cond_timedwait(&box->pcq_subscriber_condvar, &box_subscriber, &ts);
+      if (res == ETIMEDOUT)
+      {
+        break;
+      }
+      else if (res != 0)
+      {
+        break;
+      }
+      else printf("quick exit\n");
+    }
+
+    if(res == ETIMEDOUT)
+    {
+      if (pthread_mutex_unlock(&box_subscriber) != 0)
+      {
+        printf("Error unlocking mutex\n");
+        return -1;
+      }
+
+      continue;
+    }
+
+    if (pthread_mutex_unlock(&box_subscriber) != 0)
+    {
+      printf("Error unlocking mutex\n");
+      return -1;
+    }
 
     // needs to be open every time to adjust offset to start writing in correct spot
     fhandle = tfs_open(updatedBoxName, 0);
@@ -269,40 +310,6 @@ int handleSubscriber(char *client_pipe_name, char *box_name)
       // TODO check error handling while writing to box
       printf("Error reading from box %s\n", box->name);
       break;
-    }
-
-    if (pthread_mutex_lock(&box_subscriber) != 0)
-    {
-      printf("Error locking mutex\n");
-      return -1;
-    }
-
-    int res = 0;
-
-    //
-    printf("last_b: %ld, box_size: %ld\n", last_bytes_read, box->size);
-    while (last_bytes_read == box->size)
-    {
-      res = pthread_cond_timedwait(&box->pcq_subscriber_condvar, &box_subscriber, &ts);
-      if (res != 0)
-        break;
-    }
-
-    if (pthread_mutex_unlock(&box_subscriber) != 0)
-    {
-      printf("Error unlocking mutex\n");
-      return -1;
-    }
-
-    if (res == ETIMEDOUT)
-    {
-      // close box
-      if (tfs_close(fhandle) == -1)
-      {
-        printf("Eror closing box\n");
-        break;
-      }
-      continue;
     }
 
     // TODO: check why the subscribers are receiving the last 2 messages instead of the last one

@@ -25,7 +25,7 @@ int main(int argc, char **argv)
 
   if (access(client_pipe_name, F_OK) != 0)
   {
-    printf("Error occured\n");
+    WARN("Error occured\n");
     return -1;
   }
 
@@ -42,7 +42,7 @@ int main(int argc, char **argv)
     // check if fifo is open
     if (access(client_pipe_name, F_OK) != 0)
     {
-      printf("Error sending message\n");
+      WARN("Error sending message\n");
       return -1;
     }
 
@@ -53,15 +53,14 @@ int main(int argc, char **argv)
       if (close(client_fifo) == -1)
         WARN("Error closing fifo %s\n", client_pipe_name);
 
-      printf("Error sending message\n");
+      WARN("Error sending message\n");
       return -1;
     };
-
-    printf("Sent: %s\n", buffer);
   }
 
   // close fifo
-  if (close(client_fifo) == -1){
+  if (close(client_fifo) == -1)
+  {
     WARN("Error closing fifo %s\n", client_pipe_name);
     return -1;
   }

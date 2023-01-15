@@ -27,18 +27,18 @@ int main(int argc, char **argv)
   // connect to server
   if (connect(REGISTER_SUBSCRIBER, register_pipe_name, client_pipe_name, box_name) == -1)
   {
-    printf("error connecting to server");
+    WARN("error connecting to server");
     return -1;
   }
 
-  //check if server unlinked client fifo meaning something could be processed
+  // check if server unlinked client fifo meaning something could be processed
 
   // sleep for 1s to allow server to unlink client fifo
   sleep(1);
 
   if (access(client_pipe_name, F_OK) != 0)
   {
-    printf("Error occured\n");
+    WARN("Error occured\n");
     return -1;
   }
 
@@ -73,8 +73,6 @@ int main(int argc, char **argv)
   }
 
   fprintf(stdout, "%d\n", message_count);
-
-  printf("Disconnected...\n");
 
   // close fifo
   if (close(client_fifo) == -1)

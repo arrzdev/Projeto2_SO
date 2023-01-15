@@ -63,7 +63,7 @@ int createRemoveBox(OP_CODE_SIZE action_code, char *register_pipe_name, char *cl
 
   // close client fifo
   if (close(client_fifo) == -1)
-WARN("Error closing fifo %s\n", client_pipe_name);
+    WARN("Error closing fifo %s\n", client_pipe_name);
 
   // unlink client fifo
   unlink(client_pipe_name);
@@ -123,7 +123,7 @@ int listBox(char *register_pipe_name, char *client_pipe_name)
     n_boxes++;
 
     // reallocate dynamic vector memory
-    boxes = (char **)realloc(boxes, (long unsigned int)n_boxes * sizeof(char *));
+    boxes = (char **)realloc(boxes, (long unsigned int)(n_boxes + 1) * sizeof(char *));
   }
 
   // handle the list of boxes
@@ -148,7 +148,7 @@ int listBox(char *register_pipe_name, char *client_pipe_name)
 
   // close client fifo
   if (close(client_fifo) == -1)
-WARN("Error closing fifo %s\n", client_pipe_name);
+    WARN("Error closing fifo %s\n", client_pipe_name);
 
   // unlink client fifo
   unlink(client_pipe_name);

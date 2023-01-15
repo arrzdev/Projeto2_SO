@@ -1,5 +1,5 @@
 #include "wire_protocol.h"
-
+#include "logging.h"
 // TODO: we could change the way the protocol works by still using strings, but having aux functions to parse the wire messages and return response structures with the data making it easy and more readble to work with trough the code
 
 int connect(OP_CODE_SIZE op_code, char *register_pipe_name, char *client_pipe_name, char *box_name)
@@ -22,12 +22,10 @@ int connect(OP_CODE_SIZE op_code, char *register_pipe_name, char *client_pipe_na
   if (write(register_fifo, wire_message, strlen(wire_message) + 1) == -1)
   {
     close(register_fifo);
-    printf("Error registering publisher");
+    WARN("Error registering publisher");
     unlink(client_pipe_name);
     return -1;
   };
-
-  printf("Connected to server:\n \t- %s\n", wire_message);
 
   // close register fifo
   close(register_fifo);

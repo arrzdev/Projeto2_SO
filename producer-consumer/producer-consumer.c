@@ -14,8 +14,11 @@ This allows for O(1) enqueue and dequeue operations.
 int has_priority(void *element)
 {
   char *str = (char *)element;
-  OP_CODE_SIZE op_code = (OP_CODE_SIZE)str[0];
-  return op_code == REGISTER_PUBLISHER;
+
+  // str[0] to int
+  int priority = str[0] - '0';
+
+  return priority == REGISTER_PUBLISHER;
 }
 
 int pcq_create(pc_queue_t *queue, size_t capacity)
@@ -120,41 +123,37 @@ int pcq_enqueue(pc_queue_t *queue, void *elem)
   if (pthread_mutex_lock(&queue->pcq_tail_lock) != 0)
     return -1;
 
-  int priority_el = has_priority(elem);
+  // Add the element to the queue
+  queue->pcq_buffer[queue->pcq_head] = elem;
 
-  if (priority_el)
+  if (has_priority(elem))
   {
-    size_t i = 0;
+    size_t i = queue->pcq_head;
 
-    queue->pcq_current_size++;
-
-    size_t new_tail;
-
-    // Update tail value
-    if (queue->pcq_tail == 0)
-      new_tail = queue->pcq_capacity - 1;
-    else
-      new_tail = queue->pcq_tail - 1;
-
-    while (i < queue->pcq_current_size && has_priority(queue->pcq_buffer[queue->pcq_tail - i]))
+    while (i != queue->pcq_tail)
     {
-      queue->pcq_buffer[new_tail - i] = queue->pcq_buffer[queue->pcq_tail - i];
-      i++;
-    }
-    queue->pcq_buffer[queue->pcq_tail - i] = elem;
+      
+      size_t next = (i + 1) % queue->pcq_capacity;
+      
+      if(!has_priority(queue->pcq_buffer[next])) {
+        // swap
+        void *temp = queue->pcq_buffer[i];
+        queue->pcq_buffer[i] = queue->pcq_buffer[next];
+        queue->pcq_buffer[next] = temp;
+      }
+      else {
+        break;
+      }
 
-    queue->pcq_tail = new_tail;
+      i = next;
+    }
   }
+
+  // Update head value
+  if (queue->pcq_head == 0)
+    queue->pcq_head = queue->pcq_capacity - 1;
   else
-  {
-    // Add the element to the queue
-    queue->pcq_buffer[queue->pcq_head] = elem;
-    // Update head value
-    if (queue->pcq_head == 0)
-      queue->pcq_head = queue->pcq_capacity - 1;
-    else
-      queue->pcq_head--;
-  }
+    queue->pcq_head--;
 
   // Increase the current size
   queue->pcq_current_size++;

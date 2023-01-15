@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.ejs": "html",
+        "*.js": "javascript",
+        "*.pl": "prolog",
+        "logging.h": "c"
+    }
+}

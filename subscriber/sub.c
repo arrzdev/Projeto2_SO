@@ -1,7 +1,8 @@
 #include "logging.h"
 #include "client.h"
 #include "wire_protocol.h"
-#include <signal.h>
+#include "signal.h"
+#include "errno.h"
 
 volatile sig_atomic_t disconnect_flag = 0;
 
@@ -30,30 +31,52 @@ int main(int argc, char **argv)
     return -1;
   }
 
+  // check if server unlinked client fifo meaning something could be processed
+
+  // sleep for 1s to allow server to unlink client fifo
+  sleep(1);
+
+  if (access(client_pipe_name, F_OK) != 0)
+  {
+    WARN("Error occured\n");
+    return -1;
+  }
+
   // open the client fifo
   int client_fifo = open(client_pipe_name, O_RDONLY);
 
-  char buffer[PROTOCOL_MESSAGE_SIZE];
-
-  // setup signal handler
+  // setup signal handler to handle client CTRL-C
   signal(SIGINT, handleSIGINT);
+
+  char buffer[PROTOCOL_MESSAGE_SIZE];
+  char message[MESSAGE_SIZE];
+  int message_count = 0;
 
   while (1)
   {
+    ssize_t bytes_read = read(client_fifo, buffer, PROTOCOL_MESSAGE_SIZE);
+
+    if (bytes_read <= 0)
+      break;
+
     if (disconnect_flag)
       break;
 
-    if (read(client_fifo, buffer, PROTOCOL_MESSAGE_SIZE) == 0)
-      break;
+    // parse message in form of "op_code|message" and ignore op_code
+    sscanf(buffer, "%*d|%[^\n]", message);
 
     // print message
-    fprintf(stdout, "%s\n", buffer);
+    fprintf(stdout, "%s\n", message);
+
+    // increment message count
+    message_count++;
   }
 
-  printf("Disconnected...\n");
+  fprintf(stdout, "%d\n", message_count);
 
   // close fifo
-  close(client_fifo);
+  if (close(client_fifo) == -1)
+    WARN("Error closing fifo %s\n", client_pipe_name);
 
   // unlink fifo
   unlink(client_pipe_name);

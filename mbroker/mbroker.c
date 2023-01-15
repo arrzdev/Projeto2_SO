@@ -1,6 +1,5 @@
 #include "logging.h"
-#include "string.h"
-#include "wire_protocol.h"
+#include "client.h"
 
 #include "operations.h"
 #include "state.h"
@@ -9,6 +8,16 @@
 #include "errno.h"
 
 #include "producer-consumer.h"
+
+#include "signal.h"
+#include "errno.h"
+volatile sig_atomic_t exit_flag = 0;
+
+static void handleSIGINT(int sig)
+{
+  (void)sig;
+  exit_flag = 1;
+}
 typedef struct
 {
   char *name;
@@ -83,34 +92,33 @@ BoxData *getBox(char *box_name)
 
 int handlePublisher(char *client_pipe_name, char *box_name)
 {
-  // TODO how to tell server that return was -1 ?
-
-  // TODO: if a publisher or a subscriber try to connect to a box that doesnt exist, what happen?
-  // currently returns -1;
   BoxData *box = getBox(box_name);
 
   if (box == NULL)
   {
-    // TODO unlink fifo to signal error
     unlink(client_pipe_name);
-    printf("Box doesnt exist\n");
+    WARN("Box doesnt exist\n");
     return -1;
   }
 
   // lock publisher mutex
   if (pthread_mutex_lock(&box->pcq_publisher_condvar_lock) != 0)
   {
-    printf("Error locking mutex\n");
+    unlink(client_pipe_name);
+    WARN("Error lock mutex: %s\n", strerror(errno));
     return -1;
   }
 
-  // TODO: only 1 publisher at a time is supposed to be connected to the box, so if a publisher tries to connect to a box and a publisher is already connected what happen?
   // if more than one publisher is connected to a box
   // wait for publisher to disconnect
   while (box->pubs != 0)
   {
     if (pthread_cond_wait(&box->pcq_publisher_condvar, &box->pcq_publisher_condvar_lock) != 0)
+    {
+      unlink(client_pipe_name);
+      WARN("Error waiting mutex: %s\n", strerror(errno));
       return -1;
+    }
   }
 
   box->pubs++;
@@ -118,10 +126,16 @@ int handlePublisher(char *client_pipe_name, char *box_name)
   // Unlock publisher mutex
   if (pthread_mutex_unlock(&box->pcq_publisher_condvar_lock) != 0)
   {
-    printf("Error unlocking mutex\n");
+    unlink(client_pipe_name);
+    WARN("Error unlock mutex: %s\n", strerror(errno));
     box->pubs--;
+
     // broadcast pubs decrement
-    pthread_cond_broadcast(&box->pcq_publisher_condvar);
+    if (pthread_cond_broadcast(&box->pcq_publisher_condvar) != 0)
+    {
+      WARN("Error broadcasting mutex: %s\n", strerror(errno));
+    }
+
     return -1;
   }
 
@@ -131,9 +145,10 @@ int handlePublisher(char *client_pipe_name, char *box_name)
 
   // connect to publisher
   int client_fifo = open(client_pipe_name, O_RDONLY);
-  printf("[Publisher connected]\n");
 
   int fhandle = -1;
+
+  bool error = false;
 
   // read from publisher fifo
   char buffer[PROTOCOL_MESSAGE_SIZE];
@@ -153,25 +168,26 @@ int handlePublisher(char *client_pipe_name, char *box_name)
     strcpy(buffer_to_write, message);
     buffer_to_write[message_len] = '\0';
 
-    printf("Publisher: %s\n", buffer_to_write);
-
     // needs to be open every time to adjust offset to start writing in correct spot
     fhandle = tfs_open(updatedBoxName, TFS_O_APPEND);
 
     if (fhandle == -1)
     {
-      printf("Error opening box %s\n", box->name);
+      WARN("Error opening box: %s\n", box->name);
+      error = true;
       break;
     }
 
-    //  TODO: write the message in box located in tfs
-    // DONE
     ssize_t bytes_written = tfs_write(fhandle, buffer_to_write, message_len + 1);
 
     if (bytes_written == -1)
     {
-      // TODO check error handling while writing to box
-      printf("Error writing to box %s\n", box->name);
+      WARN("Error writing to box %s\n", box->name);
+      error = true;
+
+      if (tfs_close(fhandle) == -1)
+        WARN("Error closing box %s\n", box->name);
+
       break;
     }
 
@@ -179,11 +195,16 @@ int handlePublisher(char *client_pipe_name, char *box_name)
 
     // broadcast change in box subs
     if (pthread_cond_broadcast(&box->pcq_subscriber_condvar) != 0)
-      return -1;
+    {
+      WARN("Error broadcasting mutex: %s\n", strerror(errno));
+      error = true;
+      break;
+    }
 
     if (tfs_close(fhandle) == -1)
     {
-      printf("Eror closing file\n");
+      WARN("Error closing box %s\n", box->name);
+      error = true;
       break;
     }
   }
@@ -192,20 +213,34 @@ int handlePublisher(char *client_pipe_name, char *box_name)
   // no error checking because if error still need to run command below
   if (fhandle != -1)
   {
-    tfs_close(fhandle);
+    if (tfs_close(fhandle) == -1)
+    {
+      WARN("Error closing box %s\n", box->name);
+      error = true;
+    }
   }
 
   // close fifo
-  close(client_fifo);
+  if (close(client_fifo) == -1)
+  {
+    WARN("Error closing fifo %s\n", client_pipe_name);
+    error = true;
+  }
 
-  // TODO: when publisher disconnects from the box, we need to decrement the n_publishers variable in the box_data
-  // DONE
-  printf("[Publisher disconnected]\n");
   box->pubs--;
 
   // broadcast change in box pubs
   if (pthread_cond_broadcast(&box->pcq_publisher_condvar) != 0)
+  {
+    WARN("Error broadcasting mutex: %s\n", strerror(errno));
+    error = true;
+  }
+
+  if (error)
+  {
+    unlink(client_pipe_name);
     return -1;
+  }
 
   return 0;
 }
@@ -216,9 +251,8 @@ int handleSubscriber(char *client_pipe_name, char *box_name)
   BoxData *box = getBox(box_name);
   if (box == NULL)
   {
-    // TODO unlink pipe to signal error
     unlink(client_pipe_name);
-    printf("Error: Box %s does not exist.\n", box_name);
+    WARN("Error: Box %s does not exist.\n", box_name);
     return -1;
   }
 
@@ -237,28 +271,28 @@ int handleSubscriber(char *client_pipe_name, char *box_name)
 
   if (pthread_mutex_init(&box_subscriber, NULL) != 0)
   {
-    printf("Error initializing mutex\n");
+    WARN("Error init mutex: %s\n", strerror(errno));
     return -1;
   }
 
   // connect to publisher
   int client_fifo = open(client_pipe_name, O_WRONLY);
-  printf("[Subscriber connected]\n");
   char buffer[PROTOCOL_MESSAGE_SIZE];
 
-  // TODO: disconnect subscriber
-  // TODO: change every return -1 to variable error.. and return error in the end
+  bool error = false;
+
   while (access(client_pipe_name, F_OK) != -1)
   {
     if (pthread_mutex_lock(&box_subscriber) != 0)
     {
-      printf("Error locking mutex\n");
-      return -1;
+      WARN("Error lock mutex: %s\n", strerror(errno));
+      error = true;
+      break;
     }
 
     int res = 0;
 
-    while(box->size == last_bytes_read)
+    while (box->size == last_bytes_read)
     {
       // wait for publisher to write to box
       struct timespec ts;
@@ -267,23 +301,17 @@ int handleSubscriber(char *client_pipe_name, char *box_name)
 
       // time out limit to check if subscriber is still connected
       res = pthread_cond_timedwait(&box->pcq_subscriber_condvar, &box_subscriber, &ts);
-      if (res == ETIMEDOUT)
-      {
+      if (res != 0)
         break;
-      }
-      else if (res != 0)
-      {
-        break;
-      }
-      else printf("quick exit\n");
     }
 
-    if(res == ETIMEDOUT)
+    if (res == ETIMEDOUT)
     {
       if (pthread_mutex_unlock(&box_subscriber) != 0)
       {
-        printf("Error unlocking mutex\n");
-        return -1;
+        WARN("Error unlock mutex: %s\n", strerror(errno));
+        error = true;
+        break;
       }
 
       continue;
@@ -291,8 +319,9 @@ int handleSubscriber(char *client_pipe_name, char *box_name)
 
     if (pthread_mutex_unlock(&box_subscriber) != 0)
     {
-      printf("Error unlocking mutex\n");
-      return -1;
+      WARN("Error unlock mutex: %s\n", strerror(errno));
+      error = true;
+      break;
     }
 
     // needs to be open every time to adjust offset to start writing in correct spot
@@ -300,20 +329,21 @@ int handleSubscriber(char *client_pipe_name, char *box_name)
 
     if (fhandle == -1)
     {
-      printf("Error opening box %s\n", box->name);
+      WARN("Error opening box: %s\n", box->name);
+      error = true;
       break;
     }
 
     bytes_read = tfs_read(fhandle, buffer, PROTOCOL_MESSAGE_SIZE);
     if (bytes_read == -1)
     {
-      // TODO check error handling while writing to box
-      printf("Error reading from box %s\n", box->name);
+      WARN("Error reading box: %s\n", box->name);
+      error = true;
       break;
     }
 
-    // TODO: check why the subscribers are receiving the last 2 messages instead of the last one
     char message[MESSAGE_SIZE];
+
     for (int i = 0; i < bytes_read - last_bytes_read; i++)
     {
       if (buffer[last_bytes_read + i] == '\0')
@@ -328,36 +358,50 @@ int handleSubscriber(char *client_pipe_name, char *box_name)
       }
     }
 
-    printf("Sending to subscriber: %s\n", message);
-
-    // TODO: abstract this to a function
     char wire_message[PROTOCOL_MESSAGE_SIZE];
 
     sprintf(wire_message, "%d|%s", SEND_SUBSCRIBER, message);
 
     if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
     {
-      printf("Error writing to client fifo\n");
+      WARN("Error writing to fifo %s\n", client_pipe_name);
+      error = true;
       break;
     }
 
     if (tfs_close(fhandle) == -1)
     {
-      printf("Eror closing file\n");
+      WARN("Error closing box %s\n", box->name);
+      error = true;
       break;
     }
   }
 
-  printf("[Subscriber disconnected]\n");
-
   // close box
   // no error checking because if error still need to run command below
   if (fhandle != -1)
-    tfs_close(fhandle);
+  {
+    if (tfs_close(fhandle) == -1)
+    {
+      WARN("Error closing box %s\n", box->name);
+      error = true;
+    }
+  }
 
   // close fifo
-  close(client_fifo);
+  if (close(client_fifo) == -1)
+  {
+    WARN("Error closing fifo %s\n", client_pipe_name);
+    error = true;
+  }
+
   box->subs--;
+
+  if (error)
+  {
+    unlink(client_pipe_name);
+    return -1;
+  }
 
   return 0;
 }
@@ -368,9 +412,6 @@ int createBox(char *client_pipe_name, char *box_name)
 
   // format string for tfs
   char box_name_update[BOX_NAME_SIZE + 1] = "/";
-
-  // TODO: check if box already exist (idk how since we dont have access to tfs_lookup)
-  // DONE
 
   // probably need to extend tfs api
   strcat(box_name_update, box_name);
@@ -385,22 +426,20 @@ int createBox(char *client_pipe_name, char *box_name)
     // build OK response
     snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_CREATE_BOX, 0, "\0");
 
-  // TODO: check if the client pipe exist to receive the response
-
   // open client pipe
   int client_fifo = open(client_pipe_name, O_WRONLY);
 
-  // write to client pipe
-  // TODO: come up with a better way of sending the response back since more errors can occur bellow
   if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
   {
-    printf("Error while writing to client fifo\n");
-    close(client_fifo);
+    WARN("Error while writing to client fifo\n");
+    if (close(client_fifo) == -1)
+      WARN("Error closing fifo %s\n", client_pipe_name);
     return -1;
   };
 
   // close client pipe
-  close(client_fifo);
+  if (close(client_fifo) == -1)
+    WARN("Error closing fifo %s\n", client_pipe_name);
 
   // create box structure
   BoxData *box = (BoxData *)malloc(sizeof(BoxData));
@@ -417,7 +456,6 @@ int createBox(char *client_pipe_name, char *box_name)
   strcpy(box->name, box_name);
 
   // add box to the server state
-  // TODO: check if it's better to implement a different add/remove reallocation by starting with a default dynamic array size and doubling it when needed, reducing the use of realloc
   server_state->box_count++;
 
   server_state->boxes = realloc(server_state->boxes, sizeof(BoxData *) * server_state->box_count);
@@ -434,9 +472,6 @@ int listBoxes(char *client_pipe_name)
 {
   char wire_message[PROTOCOL_MESSAGE_SIZE];
 
-  // TODO: check if client exists before trying to send the list
-  // open client pipe
-
   // check if no box was created
   if (server_state->box_count == 0)
   {
@@ -447,13 +482,15 @@ int listBoxes(char *client_pipe_name)
     int client_fifo = open(client_pipe_name, O_WRONLY);
     if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
     {
-      printf("Error while writing to client fifo");
-      close(client_fifo);
+      WARN("Error while writing to client fifo");
+      if (close(client_fifo) == -1)
+        WARN("Error closing fifo %s\n", client_pipe_name);
       return -1;
     };
 
     // close client pipe
-    close(client_fifo);
+    if (close(client_fifo) == -1)
+      WARN("Error closing fifo %s\n", client_pipe_name);
     return 0;
   }
 
@@ -476,8 +513,9 @@ int listBoxes(char *client_pipe_name)
     int fhandle = tfs_open(box_name_update, 0);
     if (fhandle == -1)
     {
-      printf("Error while getting file bytes");
-      close(client_fifo);
+      WARN("Error while getting file bytes");
+      if (close(client_fifo) == -1)
+        WARN("Error closing fifo %s\n", client_pipe_name);
       return -1;
     }
 
@@ -486,8 +524,9 @@ int listBoxes(char *client_pipe_name)
 
     if (box_size == -1)
     {
-      printf("Error while getting file bytes");
-      close(client_fifo);
+      WARN("Error while getting file bytes");
+      if (close(client_fifo) == -1)
+        WARN("Error closing fifo %s\n", client_pipe_name);
       return -1;
     }
 
@@ -497,14 +536,16 @@ int listBoxes(char *client_pipe_name)
     // write to client pipe
     if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
     {
-      printf("Error while writing to client fifo");
-      close(client_fifo);
+      WARN("Error while writing to client fifo");
+      if (close(client_fifo) == -1)
+        WARN("Error closing fifo %s\n", client_pipe_name);
       return -1;
     };
   }
 
   // close client fifo
-  close(client_fifo);
+  if (close(client_fifo) == -1)
+    WARN("Error closing fifo %s\n", client_pipe_name);
   return 0;
 }
 
@@ -526,20 +567,43 @@ int deleteBox(char *client_pipe_name, char *box_name)
   if (box_index == -1)
   {
     // build ERROR response
-    // TODO: signal error to client if box doesnt exist
-    snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_DELETE_BOX, -1, "Error: Box does not exist");
+    snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_DELETE_BOX, -1, "Box does not exist");
 
     // write to client pipe
     int client_fifo = open(client_pipe_name, O_WRONLY);
     if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
     {
-      printf("Error while writing to client fifo");
-      close(client_fifo);
+      if (close(client_fifo) == -1)
+        WARN("Error closing fifo %s\n", client_pipe_name);
       return -1;
     }
 
     // close client pipe
-    close(client_fifo);
+    if (close(client_fifo) == -1)
+      WARN("Error closing fifo %s\n", client_pipe_name);
+
+    return 0;
+  }
+
+  BoxData *box = server_state->boxes[box_index];
+
+  if (box->subs || box->pubs)
+  {
+    // build ERROR response
+    snprintf(wire_message, PROTOCOL_MESSAGE_SIZE, "%d|%d|%s", RETURN_DELETE_BOX, -1, "Box is still in use");
+
+    // write to client pipe
+    int client_fifo = open(client_pipe_name, O_WRONLY);
+    if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
+    {
+      if (close(client_fifo) == -1)
+        WARN("Error closing fifo %s\n", client_pipe_name);
+      return -1;
+    }
+
+    // close client pipe
+    if (close(client_fifo) == -1)
+      WARN("Error closing fifo %s\n", client_pipe_name);
 
     return 0;
   }
@@ -557,13 +621,15 @@ int deleteBox(char *client_pipe_name, char *box_name)
     int client_fifo = open(client_pipe_name, O_WRONLY);
     if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
     {
-      printf("Error while writing to client fifo");
-      close(client_fifo);
+      WARN("Error while writing to client fifo");
+      if (close(client_fifo) == -1)
+        WARN("Error closing fifo %s\n", client_pipe_name);
       return -1;
     }
 
     // close client pipe
-    close(client_fifo);
+    if (close(client_fifo) == -1)
+      WARN("Error closing fifo %s\n", client_pipe_name);
 
     return -1;
   }
@@ -588,13 +654,15 @@ int deleteBox(char *client_pipe_name, char *box_name)
   int client_fifo = open(client_pipe_name, O_WRONLY);
   if (write(client_fifo, wire_message, PROTOCOL_MESSAGE_SIZE) == -1)
   {
-    printf("Error while writing to client fifo");
-    close(client_fifo);
+    WARN("Error while writing to client fifo");
+    if (close(client_fifo) == -1)
+      WARN("Error closing fifo %s\n", client_pipe_name);
     return -1;
   }
 
   // close client pipe
-  close(client_fifo);
+  if (close(client_fifo) == -1)
+    WARN("Error closing fifo %s\n", client_pipe_name);
 
   return 0;
 }
@@ -628,15 +696,12 @@ void session(OP_CODE_SIZE op_code, char *client_pipe_name, char *box_name)
   }
 }
 
-void thread_function(pc_queue_t *pcq, int thread_id)
+void thread_function(pc_queue_t *pcq)
 {
-  printf("Initializing thread\n");
   while (1)
   {
     // get register message from producer-consumer queue
     char *register_message = pcq_dequeue(pcq);
-
-    printf("[THREAD %d] handling register\n", thread_id);
 
     // parse register message
     OP_CODE_SIZE op_code;
@@ -649,7 +714,6 @@ void thread_function(pc_queue_t *pcq, int thread_id)
 
     // handle session
     session(op_code, client_pipe_name, box_name);
-    printf("[THREAD %d] closed session\n", thread_id);
   }
 }
 
@@ -672,25 +736,23 @@ int main(int argc, char **argv)
   }
 
   // init tfs
-  printf("Creating file system\n");
+  WARN("Creating file system\n");
   if (tfs_init(NULL) == -1)
   {
-    printf("Error creating file system");
+    WARN("Error creating file system");
     return -1;
   };
 
   if (initServerState() == -1)
   {
-    printf("Error initializing server state");
+    WARN("Error initializing server state");
     return -1;
   }
-
-  printf("Started listening for client connections..\n");
 
   // init n_sessions threads
   pc_queue_t pcq;
 
-  pcq_create(&pcq, n_sessions);
+  pcq_create(&pcq, n_sessions + 20);
 
   for (int i = 0; i < n_sessions; i++)
   {
@@ -698,9 +760,17 @@ int main(int argc, char **argv)
     pthread_create(&thread, NULL, (void *)thread_function, &pcq);
   }
 
+  // setup signal handler to handle client CTRL-C
+  signal(SIGINT, handleSIGINT);
+
   // receive register messages
   while (1)
   {
+    if (exit_flag)
+    {
+      break;
+    }
+
     // open the register pipe
     int register_fifo = open(register_pipe_name, O_RDONLY);
 
@@ -708,15 +778,18 @@ int main(int argc, char **argv)
     char buffer[PROTOCOL_MESSAGE_SIZE];
     if (read(register_fifo, buffer, PROTOCOL_MESSAGE_SIZE) == -1)
     {
-      printf("Error while reading register fifo");
+      WARN("Error while reading register fifo");
       return -1;
     };
-
     // enqueue register message
     pcq_enqueue(&pcq, buffer);
 
     close(register_fifo);
   }
+
+  // free file system and queue
+  tfs_destroy();
+  pcq_destroy(&pcq);
 
   return 0;
 }
